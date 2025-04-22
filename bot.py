@@ -5,7 +5,7 @@ import requests
 import logging
 import asyncio # Import asyncio
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes # Import Application instead of ApplicationBuilder
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler # Import Application instead of ApplicationBuilder
 from dotenv import load_dotenv
 from aiohttp import web # Import aiohttp web
 
@@ -82,10 +82,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Could not get file information.")
         return
 
+    logger.info(f"Received file: ID={file_id}, Name={file_name}") # Log file info
     await msg.reply_text("Processing your file, please wait...")
 
     try:
         bot_file = await context.bot.get_file(file_id)
+        # Log file size
+        file_size = bot_file.file_size
+        logger.info(f"File size: {file_size} bytes")
         temp_file_path = os.path.join(temp_dir, file_name)
 
         # Download the file
@@ -96,11 +100,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Upload the file
         logger.info(f"Uploading {file_name} to external service...")
         external_link = upload_to_external_service(temp_file_path)
-
-        # Reply with the link or an error message
         if external_link:
+            logger.info(f"Upload successful: {external_link}") # Log success
             await msg.reply_text(f"Download link:\n{external_link}")
         else:
+            logger.warning(f"Upload failed for {file_name}") # Log failure
             await msg.reply_text("Sorry, the upload failed.")
 
     except Exception as e:
@@ -109,11 +113,21 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         # Clean up the temporary file
         if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            logger.info(f"Attempting to remove temporary file: {temp_file_path}") # Log cleanup start
             try:
                 os.remove(temp_file_path)
                 logger.info(f"Removed temporary file: {temp_file_path}")
             except OSError as e:
                 logger.error(f"Failed to remove temporary file {temp_file_path}: {e}")
+
+# --- Start Command Handler ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Replies when the /start command is issued."""
+    user = update.effective_user
+    logger.info(f"User {user.id} ({user.first_name}) started the bot.")
+    await update.message.reply_html(
+        rf"Hi {user.mention_html()}! Send me a file (document, photo, video) and I'll give you a download link."
+    )
 
 # --- Web Server Handler ---
 async def health_check(request):
@@ -138,6 +152,8 @@ async def main():
         (filters.Document.ALL | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND,
         handle_file
     ))
+    # Add the start command handler
+    application.add_handler(CommandHandler("start", start_command))
 
     # --- Initialize Web Server ---
     logger.info("Initializing web server...")
